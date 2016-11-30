@@ -1,0 +1,83 @@
+---
+title: "Random Forest - Predicting Titanic Survival"
+output: html_document
+---
+
+```{r include=FALSE}
+library(randomForest)
+library(caret)
+library(ROCR)
+```
+
+Load in data
+```{r}
+setwd("C:/Users/elrivas/Documents/Trainings/R Training/Titanic")
+total_data <- read.csv("C:/Users/elrivas/Documents/Trainings/R Training/Titanic/train.csv")
+```
+
+Setting missing age values to the mean
+```{r}
+total_data$Age[is.na(total_data$Age)] <- mean(total_data$Age, na.rm=TRUE)
+```
+
+Create new variable for family size
+```{r}
+total_data$fam_size <- (total_data$SibSp+total_data$Parch)+1
+```
+
+Factor categorical variables. Tell R that the order of classes goes 3,2,1 not 1,2,3.
+```{r}
+total_data$Survived <- as.factor(total_data$Survived)
+total_data$Embarked <- as.factor(total_data$Embarked)
+total_data$Sex <- as.factor(total_data$Sex)
+total_data$Pclass <- factor(total_data$Pclass, levels=c(3,2,1), order = TRUE)
+```
+
+Function to split data
+```{r}
+split_function <- function(raw, prop.split){
+  # randomize
+  raw <- raw[sample(1:nrow(raw)),]
+  # new variable, make default "train" for now
+  raw$test_or_train <- "train"
+  raw$test_or_train[sample(1:nrow(raw), size=((prop.split)*nrow(raw)))] <- "test"
+  return(raw)
+}
+```
+
+Run function and subset data into "test" and "train"
+```{r}
+new_data <- split_function(total_data, .5)
+
+train <- subset(new_data, test_or_train=="train")
+test <- subset(new_data, test_or_train=="test")
+```
+
+Get variable names and consider which ones would be helpful for predicting survival. Passenger ID, Name, Ticket, and Cabin won't contribute to the model.
+```{r}
+names(total_data)
+```
+
+Run model. Set seed to ensure reproducability. Error plateaus around 1000 trees. Set trees to 1000.
+```{r}
+set.seed(500)
+rf <- randomForest(Survived ~ Pclass + Sex + Age + fam_size + Fare + Embarked, 
+                   data=train, importance=TRUE, ntree=1000)
+plot(rf)
+```
+
+See which variables are most important in model. Sex and Pclass are most important in predicting death.
+```{r}
+varImpPlot(rf)
+```
+
+Use the rf to predict survival
+```{r}
+pred <- predict(rf, test)
+```
+
+Calculate the accuracy of the model with a confusion matrix
+```{r}
+accuracy <- confusionMatrix(data=pred, reference = test$Survived)$overall[1]
+print(accuracy)
+```
