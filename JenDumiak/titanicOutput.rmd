@@ -1,0 +1,178 @@
+---
+title: "Titanic Data Set Random Forest"
+author: "Jen Dumiak"
+date: "December 1, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Library for random forest
+library(randomForest)
+# Library for decision trees
+library(rpart)
+library(party)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+# Library for k-fold cross validation function and confusionMatrix
+library(caret)
+# Library for ROC curves
+library(ROCR)
+# Splitting data function
+source("C:/Users/jdumiak/Documents/Titanic/dataSplit.R")
+```
+
+## Random Forest Introduction
+
+We will perform a random forest on our titanic data set to see how well certain features are at predicting whether a passenger survived or not. A major benefit of using a random forest is that we can let the model predict the important features. 
+
+## Variable Choice and Data Cleaning
+
+```{r}
+# Use the train data,  load here make na blank
+titanic <- read.csv("C:/Users/jdumiak/Documents/Titanic/train.csv", header = TRUE, na.strings=c(""))
+
+summary(titanic)
+
+# Check for missing values
+sapply(titanic,function(x) sum(is.na(x)))
+# Cabin has way too many missing values, drop this variable immeadiately
+# Also Pasenger ID since it is an index, name because it is too specific and ticket
+# Check for unique values
+sapply(titanic, function(x) length(unique(x)))
+```
+
+A brief glance at the data shows that Cabin has way too many missing variables, so we dropped this variable because random forests cannot handle missing data. Further, PassengerID, name, and ticket are too specific to one person making it the most important data to split the tree on. We will drop these features as well and are now ready to begin building our model. 
+
+The features we included to predict survived (1=survived, 0=dead) are:
+
+        class, 1 = 1st class, 2 = 2nd class, 3 = third class
+        sibsp=Number of Siblings/Spouses Aboard
+        parch=Number of Parents/Children Aboard
+        fare=Passenger Fare
+        embarked=Port of Embarkation
+
+We needed to clean our data because, as mentioned above, random forests cannot take missing values. We use a decision tree to determine the value of age and replace the two missing values in with 'S' because a majority of the data have that value. Lastly, we factor the data.
+
+```{r}
+# Age has too many missing values, but is most likely important, we will replace the NA with whatever our decision tree predicts
+Agefit <- rpart(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked,
+                data=titanic[!is.na(titanic$Age),], 
+                method="anova")
+titanic$Age[is.na(titanic$Age)] <- predict(Agefit, titanic[is.na(titanic$Age),])
+
+# Embark has two blanks, a majority have 'S' so we will just replace those NA with that value
+titanic$Embarked[c(which(is.na(titanic$Embarked)))] <- "S"
+
+# Fare has no NA value so good here
+
+# Factor data
+titanic$Pclass <- factor(titanic$Pclass, ordered = TRUE, levels = c("3","2","1"))
+# Rename, 1st class is better than third class
+levels(titanic$Pclass) <- c("Third Class", "Second Class", "First Class")
+titanic$Sex <- as.factor(titanic$Sex)
+titanic$Embarked <- factor(titanic$Embarked)
+```
+
+## Train and Test: Random Forest Model
+
+A crucial step to use in predictive modeling is to split the dataset into test and train to avoid overfitting to this specific partition of the data. We set a random seed and split the data into train and test and will now work with the train set. 
+
+    
+```{r}
+# Function to split data, dataSplit
+ dataSplit <- function(dataFrame, splitPercent, seed){
+      # Split the data into two sets
+      smp_size <- floor(splitPercent * nrow(dataFrame))
+      
+      # Set the seed to make your partition reproducible
+      set.seed(seed)
+      trainindex <- sample(seq_len(nrow(dataFrame)), size = smp_size)
+      
+      dataFrame[trainindex, 13]  <- "Train"
+      dataFrame[-trainindex, 13] <- "Test"
+      colnames(dataFrame)[13] <- "Label"
+      train <- dataFrame[trainindex, ]
+      test <- dataFrame[-trainindex, ]
+      
+      returnList <- list(dataFrame, train, test)
+      return(returnList)
+    }
+outputList <- dataSplit(titanic, 0.5, 123)
+titanic <- data.frame(outputList[1])
+train <- data.frame(outputList[2])
+test <- data.frame(outputList[3])
+```  
+
+Now, we will create the random forest with 2000 trees from the train set using all the features we stated above. 
+
+```{r}
+# Create the random forest with 2000 trees from the train set, also monitor what variables are important 
+fit <- randomForest(as.factor(Survived) ~ Pclass + Sex + Age + Fare + SibSp + Parch +                      Embarked,
+                    data=train, 
+                    importance=TRUE, 
+                    ntree=2000)
+```
+
+We have our random forest model and would like to see what variables are significant.
+
+```{r}
+# See what variables are significant
+print(fit) # view results 
+plot(fit) # see where the ntree flattens the error out 
+importance(fit) # importance of each predictor
+varImpPlot(fit)
+# Variables most important are Sex, Fare, Pclass, and Age rest are insigificant to the model
+```
+
+The accuracy plot tests to see how worse the model performs without each feature, so a high decrease in accuracy would be expected for very predictive features. Meanwhile, the Gini plot measures how pure the nodes are at the end of the tree and tests to see the result if each feature is taken out; a high score means the feature was important. Finally, we can see that the most important features are Sex, Fare, Pclass, and Age, while the rest are insigificant to predicting whether a passenger survived. 
+
+## Predicting Passenger Survival
+
+Since we have our random forest fit from our train data, we want to predict whether a passenger survives using the test data to see how well our model performs. We will use the predict function to do so: 
+
+```{r}
+# Predict with the test data
+pred <- data.frame(predict(fit, test, type = "class"))
+```
+
+We want to see how well our model did with the test data, so we will look at the accuracy rate.
+```{r}
+# Look at the misclassification error to see how well model is doing
+misclassificationError <- mean(pred != test$Survived)
+print(paste('Accuracy',1-misclassificationError))
+```
+
+Here our accuracy rate is about 80%, meaning we correctly predicted whether the passenger survived 80% of the time. 
+
+## Evaluating Performance
+
+We would like create more plots to visualize performance and evaluation. First, we will look at the confusion matrix which plots your false positive, false negative, true positive, and false positive rates. 
+True Negatives - Case correctly predicted to be death
+False Negatives - Case predicted to be death, but actually survived
+False Positives - Case predicted to be survived, but actually death
+True Positives - Case correctly predicted to be survival
+We used the confusionMatrix command from the caret package, so our output gives us the confusion matrix in addition to other useful performance metrics.
+
+```{r}
+# Plots to visualize performance & evaluation
+# Confusion matrix
+confusionmat <- confusionMatrix(pred[[1]], test$Survived)
+```
+
+Next we will look at the ROC curve and the AUC.
+
+```{r}
+# ROC Curve + AUC
+# Predictions are your continuous predictions of the classification, the labels are the binary truth for each variable
+predroc <- data.frame(predict(fit, test, type = "prob"))
+pr <- prediction(predroc[2], test$Survived)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+```
+
+Both the ROC curve and AUC show that the model is an okay predictor of passenger survival. There are most likely other interations, like sex and age and age and class, that we are not accounting for in our model. In a future run, we could include these interactions in a dummy variable and hopefully improve our accuracy rate.
